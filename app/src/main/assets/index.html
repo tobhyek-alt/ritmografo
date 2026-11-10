@@ -110,7 +110,7 @@ footer{color:var(--muted);font-size:12px;margin-top:22px;line-height:1.6}
       <canvas id="waveCv" style="height:230px"></canvas>
     </div>
     <div class="panel">
-      <h2><i style="background:var(--gold)"></i>Espectro 3D <small>arrastra para girarlo</small></h2>
+      <h2><i style="background:var(--gold)"></i>Espectro en barras 3D <small>arrastra para girarlo</small></h2>
       <canvas id="specCv" style="height:230px;touch-action:none;cursor:grab"></canvas>
     </div>
   </div>
@@ -361,16 +361,16 @@ function drawWave(){
   g.strokeStyle='#4cc9f0'; g.lineWidth=2; g.shadowColor='#4cc9f0'; g.shadowBlur=8; g.stroke(); g.shadowBlur=0;
 }
 
-// ---------- espectro 3D (cascada) ----------
-const SPEC_N=64, SPEC_ROWS=46;
-let specRows=[], specFrame=0, specView={skew:0.18, elev:0.62};
+// ---------- espectro 3D (barras en bloques) ----------
+const SPEC_N=32, SPEC_ROWS=9;
+let specRows=[], specFrame=0, specView={skew:0.8, elev:0.75};
 (function(){
   const c=$('specCv'); let drag=null;
-  c.addEventListener('pointerdown',e=>{ drag={x:e.clientX,y:e.clientY,s:specView.skew,el:specView.elev}; c.setPointerCapture(e.pointerId); });
+  c.addEventListener('pointerdown',e=>{ drag={x:e.clientX,y:e.clientY,s:specView.skew,el:specView.elev}; c.setPointerCapture(e.pointerId); c.style.cursor='grabbing'; });
   c.addEventListener('pointermove',e=>{ if(!drag) return;
-    specView.skew=Math.max(-0.9,Math.min(0.9,drag.s+(e.clientX-drag.x)/250));
-    specView.elev=Math.max(0.25,Math.min(0.85,drag.el+(e.clientY-drag.y)/300)); });
-  ['pointerup','pointercancel'].forEach(ev=>c.addEventListener(ev,()=>drag=null));
+    specView.skew=Math.max(-1.2,Math.min(1.2,drag.s+(e.clientX-drag.x)/120));
+    specView.elev=Math.max(0.2,Math.min(1.3,drag.el-(e.clientY-drag.y)/120)); });
+  ['pointerup','pointercancel'].forEach(ev=>c.addEventListener(ev,()=>{ drag=null; c.style.cursor='grab'; }));
 })();
 function sampleSpectrum(){
   const binHz=actx.sampleRate/analyser.fftSize, fMin=30, fMax=16000, row=new Float32Array(SPEC_N);
@@ -382,34 +382,47 @@ function sampleSpectrum(){
   }
   return row;
 }
+const BG_RGB=[18,21,29];
+function barColor(i){ const f=i/(SPEC_N-1); return f<0.13?[184,243,90]: f<0.5?[255,200,87]: f<0.75?[255,140,90]:[255,77,109]; }
+function shade(c,k,depth){ // k = brillo de la cara, depth 0..1 = mezcla con el fondo
+  const m=v=>Math.round(Math.min(255,v*k));
+  return `rgb(${[0,1,2].map(j=>Math.round(m(c[j])*(1-depth)+BG_RGB[j]*depth)).join(',')})`;
+}
 function drawSpec(){
   const [g,w,h]=fit($('specCv'));
-  if (active() && (specFrame++ % 2===0)){ specRows.unshift(sampleSpectrum()); if (specRows.length>SPEC_ROWS) specRows.pop(); }
-  if (!specRows.length) return idle(g,w,h,'El espectro 3D aparecerá aquí · arrastra para girarlo');
-  const front=h-18, horizon=h*(1-specView.elev)-10, depthK=2.6, peak=h*0.5;
-  const colAt=i=>{ const f=i/(SPEC_N-1); return f<0.12?[184,243,90]: f<0.55?[255,200,87]:[255,77,109]; };
-  // de atrás hacia adelante para que las filas cercanas tapen a las lejanas
+  if (active() && (specFrame++ % 4===0)){ specRows.unshift(sampleSpectrum()); if (specRows.length>SPEC_ROWS) specRows.pop(); }
+  if (!specRows.length) return idle(g,w,h,'Las barras 3D aparecerán aquí · arrastra para girarlas');
+  const ddx=specView.skew*14, ddy=-specView.elev*9;           // desplazamiento por fila hacia el fondo
+  const span=Math.abs(ddx)*(SPEC_ROWS-1), y0=h-20;
+  const x0=10+(ddx<0?span:0), W=w-20-span, step=W/SPEC_N, bw=step*0.72;
+  const maxH=y0+ddy*(SPEC_ROWS-1)-10;
+  const dX=ddx*0.85, dY=ddy*0.85;                               // fondo de cada bloque
+  const order=ddx>=0?[...Array(SPEC_N).keys()]:[...Array(SPEC_N).keys()].reverse();
   for (let r=specRows.length-1;r>=0;r--){
-    const row=specRows[r], z=r/(SPEC_ROWS-1), s=1/(1+z*depthK);
-    const baseY=horizon+(front-horizon)*s, width=w*0.9*s, x0=w/2-width/2+specView.skew*w*0.45*(1-s);
-    const pts=[];
-    for (let i=0;i<SPEC_N;i++) pts.push([x0+i/(SPEC_N-1)*width, baseY-row[i]*peak*s]);
-    g.beginPath(); g.moveTo(pts[0][0],baseY);
-    pts.forEach(p=>g.lineTo(p[0],p[1])); g.lineTo(pts[SPEC_N-1][0],baseY); g.closePath();
-    const fade=Math.pow(1-z,1.3);
-    g.fillStyle='#12151d'; g.fill();
-    const fg=g.createLinearGradient(0,baseY-peak*s,0,baseY); fg.addColorStop(0,`rgba(255,77,109,${0.16*fade})`); fg.addColorStop(1,'rgba(76,201,240,0.02)');
-    g.fillStyle=fg; g.fill();
-    const grd=g.createLinearGradient(x0,0,x0+width,0);
-    [0,0.11,0.13,0.5,0.6,1].forEach(f=>{ const c=colAt(Math.round(f*(SPEC_N-1))); grd.addColorStop(f,`rgba(${c[0]},${c[1]},${c[2]},${0.12+0.88*fade})`); });
-    g.beginPath(); pts.forEach((p,i)=>i?g.lineTo(p[0],p[1]):g.moveTo(p[0],p[1]));
-    g.strokeStyle=grd; g.lineWidth=r===0?2.2:1.1; g.stroke();
-    if (r===0){ g.save(); g.shadowColor='#ff4d6d'; g.shadowBlur=10; g.stroke(); g.restore(); }
+    const row=specRows[r], depth=Math.min(0.85,r/(SPEC_ROWS-1)*0.9);
+    const ox=x0+ddx*r, oy=y0+ddy*r;
+    for (const i of order){
+      const v=row[i], bh=Math.max(2,v*maxH), c=barColor(i);
+      const x=ox+i*step, top=oy-bh, glow=r===0?0.75+0.45*v:0.8;
+      // costado
+      const sx=ddx>=0?x+bw:x;
+      g.beginPath(); g.moveTo(sx,oy); g.lineTo(sx+dX,oy+dY); g.lineTo(sx+dX,top+dY); g.lineTo(sx,top); g.closePath();
+      g.fillStyle=shade(c,0.5*glow,depth); g.fill();
+      // tapa
+      g.beginPath(); g.moveTo(x,top); g.lineTo(x+bw,top); g.lineTo(x+bw+dX,top+dY); g.lineTo(x+dX,top+dY); g.closePath();
+      g.fillStyle=shade(c,1.25*glow,depth); g.fill();
+      // frente
+      const fg=g.createLinearGradient(0,top,0,oy);
+      fg.addColorStop(0,shade(c,0.95*glow,depth)); fg.addColorStop(1,shade(c,0.45*glow,Math.min(1,depth+0.25)));
+      g.fillStyle=fg; g.fillRect(x,top,bw,bh);
+    }
   }
+  // brillo de los golpes en la fila de enfrente
+  if (pulse>0.05){ g.fillStyle=`rgba(255,77,109,${0.12*pulse})`; g.fillRect(0,0,w,h); }
   g.fillStyle='#6b7390'; g.font='10px "JetBrains Mono",monospace'; g.textBaseline='bottom'; g.textAlign='center';
-  const width=w*0.9, x0=w*0.05, fMin=30, fMax=16000;
+  const fMin=30, fMax=16000;
   [[60,'60'],[250,'250'],[1000,'1k'],[4000,'4k'],[12000,'12k']].forEach(([f,l])=>{
-    g.fillText(l+'Hz', x0+Math.log(f/fMin)/Math.log(fMax/fMin)*width, h);
+    g.fillText(l+'Hz', x0+Math.log(f/fMin)/Math.log(fMax/fMin)*SPEC_N*step, h-2);
   });
 }
 
