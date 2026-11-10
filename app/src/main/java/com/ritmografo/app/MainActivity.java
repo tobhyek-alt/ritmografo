@@ -2,11 +2,15 @@ package com.ritmografo.app;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.WallpaperManager;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
+import android.widget.Toast;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -27,6 +31,7 @@ public class MainActivity extends Activity {
     private static final String START_URL = "https://appassets.androidplatform.net/assets/index.html";
     private static final int REQ_MIC = 10;
     private static final int REQ_FILE = 11;
+    private static final int REQ_WALLPAPER = 12;
 
     private WebView webView;
     private PermissionRequest pendingPermission;
@@ -92,12 +97,47 @@ public class MainActivity extends Activity {
             }
         });
 
+        webView.addJavascriptInterface(new Bridge(), "Android");
+
         if (savedInstanceState != null) webView.restoreState(savedInstanceState);
         else webView.loadUrl(START_URL);
     }
 
+    /** Puente para que la página pueda activar el fondo de pantalla. */
+    public class Bridge {
+        @JavascriptInterface
+        public void setWallpaper() {
+            runOnUiThread(() -> {
+                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_WALLPAPER);
+                } else {
+                    openWallpaperPicker();
+                }
+            });
+        }
+    }
+
+    private void openWallpaperPicker() {
+        Intent i = new Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER);
+        i.putExtra(WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
+                new ComponentName(this, RitmoWallpaperService.class));
+        try {
+            startActivity(i);
+        } catch (Exception e) {
+            try {
+                startActivity(new Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER));
+            } catch (Exception ignored) {
+                Toast.makeText(this, "Tu teléfono no admite fondos animados", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        if (requestCode == REQ_WALLPAPER) {
+            openWallpaperPicker();
+            return;
+        }
         if (requestCode == REQ_MIC && pendingPermission != null) {
             if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
                 pendingPermission.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});

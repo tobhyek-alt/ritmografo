@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wp_name">Ritmógrafo</string>
+    <string name="wp_desc">Se mueve al ritmo de la música que suena en tu teléfono (Spotify, YouTube y otras apps).</string>
+</resources>

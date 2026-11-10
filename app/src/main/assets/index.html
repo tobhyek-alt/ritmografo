@@ -12,6 +12,7 @@
   --beat:#ff4d6d; --wave:#4cc9f0; --bass:#b8f35a; --gold:#ffc857;
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html,body{margin:0;background:var(--bg);color:var(--text);font-family:"Space Grotesk",system-ui,sans-serif}
 .wrap{max-width:1180px;margin:0 auto;padding:28px 20px 48px}
 header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:20px}
@@ -74,6 +75,7 @@ footer{color:var(--muted);font-size:12px;margin-top:22px;line-height:1.6}
       <input id="file" type="file" accept="audio/*">
       <button id="play" class="primary" disabled>▶ Reproducir</button>
       <button id="mic">🎙 Micrófono</button>
+      <button id="wp" hidden>🖼 Fondo de pantalla</button>
     </div>
   </header>
 
@@ -105,11 +107,11 @@ footer{color:var(--muted);font-size:12px;margin-top:22px;line-height:1.6}
   <div class="grid two">
     <div class="panel">
       <h2><i style="background:var(--wave)"></i>Forma de onda</h2>
-      <canvas id="waveCv" style="height:160px"></canvas>
+      <canvas id="waveCv" style="height:230px"></canvas>
     </div>
     <div class="panel">
-      <h2><i style="background:var(--gold)"></i>Espectro de frecuencias</h2>
-      <canvas id="specCv" style="height:160px"></canvas>
+      <h2><i style="background:var(--gold)"></i>Espectro 3D <small>arrastra para girarlo</small></h2>
+      <canvas id="specCv" style="height:230px;touch-action:none;cursor:grab"></canvas>
     </div>
   </div>
 
@@ -359,21 +361,55 @@ function drawWave(){
   g.strokeStyle='#4cc9f0'; g.lineWidth=2; g.shadowColor='#4cc9f0'; g.shadowBlur=8; g.stroke(); g.shadowBlur=0;
 }
 
-function drawSpec(){
-  const [g,w,h]=fit($('specCv'));
-  if (!active()) return idle(g,w,h,'El espectro aparecerá aquí');
-  const N=56, binHz=actx.sampleRate/analyser.fftSize, fMin=30, fMax=16000, gap=2, bw=(w-gap*(N-1))/N;
-  for (let i=0;i<N;i++){
-    const f0=fMin*Math.pow(fMax/fMin,i/N), f1=fMin*Math.pow(fMax/fMin,(i+1)/N);
+// ---------- espectro 3D (cascada) ----------
+const SPEC_N=64, SPEC_ROWS=46;
+let specRows=[], specFrame=0, specView={skew:0.18, elev:0.62};
+(function(){
+  const c=$('specCv'); let drag=null;
+  c.addEventListener('pointerdown',e=>{ drag={x:e.clientX,y:e.clientY,s:specView.skew,el:specView.elev}; c.setPointerCapture(e.pointerId); });
+  c.addEventListener('pointermove',e=>{ if(!drag) return;
+    specView.skew=Math.max(-0.9,Math.min(0.9,drag.s+(e.clientX-drag.x)/250));
+    specView.elev=Math.max(0.25,Math.min(0.85,drag.el+(e.clientY-drag.y)/300)); });
+  ['pointerup','pointercancel'].forEach(ev=>c.addEventListener(ev,()=>drag=null));
+})();
+function sampleSpectrum(){
+  const binHz=actx.sampleRate/analyser.fftSize, fMin=30, fMax=16000, row=new Float32Array(SPEC_N);
+  for (let i=0;i<SPEC_N;i++){
+    const f0=fMin*Math.pow(fMax/fMin,i/SPEC_N), f1=fMin*Math.pow(fMax/fMin,(i+1)/SPEC_N);
     let a=Math.floor(f0/binHz), b=Math.max(a+1,Math.ceil(f1/binHz)), m=0;
     for (let k=a;k<b && k<freq.length;k++) m=Math.max(m,freq[k]);
-    const v=m/255, bh=Math.max(2,v*(h-18)), x=i*(bw+gap);
-    g.fillStyle = f1<=170 ? '#b8f35a' : `hsl(${40-i*0.4},100%,${45+v*25}%)`;
-    g.globalAlpha = 0.35+0.65*v; g.fillRect(x,h-14-bh,bw,bh); g.globalAlpha=1;
+    row[i]=m/255;
   }
-  g.fillStyle='#6b7390'; g.font='10px "JetBrains Mono",monospace'; g.textBaseline='bottom';
+  return row;
+}
+function drawSpec(){
+  const [g,w,h]=fit($('specCv'));
+  if (active() && (specFrame++ % 2===0)){ specRows.unshift(sampleSpectrum()); if (specRows.length>SPEC_ROWS) specRows.pop(); }
+  if (!specRows.length) return idle(g,w,h,'El espectro 3D aparecerá aquí · arrastra para girarlo');
+  const front=h-18, horizon=h*(1-specView.elev)-10, depthK=2.6, peak=h*0.5;
+  const colAt=i=>{ const f=i/(SPEC_N-1); return f<0.12?[184,243,90]: f<0.55?[255,200,87]:[255,77,109]; };
+  // de atrás hacia adelante para que las filas cercanas tapen a las lejanas
+  for (let r=specRows.length-1;r>=0;r--){
+    const row=specRows[r], z=r/(SPEC_ROWS-1), s=1/(1+z*depthK);
+    const baseY=horizon+(front-horizon)*s, width=w*0.9*s, x0=w/2-width/2+specView.skew*w*0.45*(1-s);
+    const pts=[];
+    for (let i=0;i<SPEC_N;i++) pts.push([x0+i/(SPEC_N-1)*width, baseY-row[i]*peak*s]);
+    g.beginPath(); g.moveTo(pts[0][0],baseY);
+    pts.forEach(p=>g.lineTo(p[0],p[1])); g.lineTo(pts[SPEC_N-1][0],baseY); g.closePath();
+    const fade=Math.pow(1-z,1.3);
+    g.fillStyle='#12151d'; g.fill();
+    const fg=g.createLinearGradient(0,baseY-peak*s,0,baseY); fg.addColorStop(0,`rgba(255,77,109,${0.16*fade})`); fg.addColorStop(1,'rgba(76,201,240,0.02)');
+    g.fillStyle=fg; g.fill();
+    const grd=g.createLinearGradient(x0,0,x0+width,0);
+    [0,0.11,0.13,0.5,0.6,1].forEach(f=>{ const c=colAt(Math.round(f*(SPEC_N-1))); grd.addColorStop(f,`rgba(${c[0]},${c[1]},${c[2]},${0.12+0.88*fade})`); });
+    g.beginPath(); pts.forEach((p,i)=>i?g.lineTo(p[0],p[1]):g.moveTo(p[0],p[1]));
+    g.strokeStyle=grd; g.lineWidth=r===0?2.2:1.1; g.stroke();
+    if (r===0){ g.save(); g.shadowColor='#ff4d6d'; g.shadowBlur=10; g.stroke(); g.restore(); }
+  }
+  g.fillStyle='#6b7390'; g.font='10px "JetBrains Mono",monospace'; g.textBaseline='bottom'; g.textAlign='center';
+  const width=w*0.9, x0=w*0.05, fMin=30, fMax=16000;
   [[60,'60'],[250,'250'],[1000,'1k'],[4000,'4k'],[12000,'12k']].forEach(([f,l])=>{
-    const x=Math.log(f/fMin)/Math.log(fMax/fMin)*w; g.textAlign='center'; g.fillText(l+'Hz',x,h);
+    g.fillText(l+'Hz', x0+Math.log(f/fMin)/Math.log(fMax/fMin)*width, h);
   });
 }
 
@@ -454,6 +490,12 @@ function loop(){
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
+
+// botón de fondo de pantalla (solo dentro de la app de Android)
+if (window.Android && window.Android.setWallpaper){
+  const b=$('wp'); b.hidden=false;
+  b.addEventListener('click',()=>window.Android.setWallpaper());
+}
 </script>
 </body>
 </html>
