@@ -21,8 +21,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 
 /**
- * Fondo de pantalla animado que escucha lo que suena en el teléfono (Spotify,
- * YouTube, etc.) usando el Visualizer de Android sobre la mezcla global (sesión 0).
+ * Fondo de pantalla animado: espectro en barras 3D que se mueve con lo que suena
+ * en el teléfono (Spotify, YouTube, etc.). Usa el Visualizer de Android sobre la
+ * mezcla global de audio (sesión 0).
  */
 public class RitmoWallpaperService extends WallpaperService {
 
@@ -33,8 +34,9 @@ public class RitmoWallpaperService extends WallpaperService {
 
     private class RitmoEngine extends Engine implements Visualizer.OnDataCaptureListener {
 
-        private static final int BARS = 72;
-        private static final int HIST = 180;
+        private static final int BARS = 28;     // barras por fila
+        private static final int ROWS = 10;     // filas de profundidad (historial)
+        private static final int SNAP_EVERY = 5; // cuadros entre cada fila nueva
 
         private final Handler handler = new Handler(Looper.getMainLooper());
         private final Runnable drawer = this::drawFrame;
@@ -42,58 +44,44 @@ public class RitmoWallpaperService extends WallpaperService {
         private Visualizer vis;
         private boolean noPermission = false, visError = false;
 
-        // datos de audio
-        private volatile byte[] wave;
-        private final float[] bands = new float[BARS];
+        // audio
         private final float[] targetBands = new float[BARS];
+        private final float[] bands = new float[BARS];
+        private final ArrayList<float[]> rows = new ArrayList<>();
+        private int frame = 0;
         private float samplingHz = 44100f;
         private int captureSize = 1024;
 
-        // detección de golpes
-        private final ArrayList<float[]> recent = new ArrayList<>(); // {t, e}
+        // golpes
+        private final ArrayList<float[]> recent = new ArrayList<>();
         private final ArrayList<Float> beatTimes = new ArrayList<>();
-        private float lastBeat = 0, pulse = 0, level = 0, smoothLevel = 0;
-        private float bpm = 0;
-        private final float[] energyHist = new float[HIST];
-        private final boolean[] beatHist = new boolean[HIST];
-        private int histPos = 0;
-        private float lastAudioT = -10;
+        private float lastBeat = -10, pulse = 0, bpm = 0, lastAudioT = -10;
 
-        private final Paint barPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint linePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        // dibujo
+        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint face = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint bpmText = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint smallText = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Path path = new Path();
+        private final Path quad = new Path();
 
-        private static final int BG = 0xFF0A0C11;
-        private static final int BEAT = 0xFFFF4D6D;
-        private static final int WAVE = 0xFF4CC9F0;
-        private static final int BASS = 0xFFB8F35A;
+        private static final int[] BG = {10, 12, 17};
 
         RitmoEngine() {
-            barPaint.setStrokeCap(Paint.Cap.ROUND);
-            linePaint.setStyle(Paint.Style.STROKE);
-            linePaint.setStrokeJoin(Paint.Join.ROUND);
-            textPaint.setColor(Color.WHITE);
-            textPaint.setTextAlign(Paint.Align.CENTER);
-            textPaint.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
-            smallText.setColor(0xFF8A91A5);
+            bpmText.setColor(Color.WHITE);
+            bpmText.setTextAlign(Paint.Align.CENTER);
+            bpmText.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
             smallText.setTextAlign(Paint.Align.CENTER);
             smallText.setTypeface(Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL));
+            for (int r = 0; r < ROWS; r++) rows.add(new float[BARS]);
         }
 
+        // ---------- ciclo de vida ----------
         @Override
         public void onVisibilityChanged(boolean v) {
             visible = v;
-            if (v) {
-                startVisualizer();
-                handler.removeCallbacks(drawer);
-                handler.post(drawer);
-            } else {
-                handler.removeCallbacks(drawer);
-                stopVisualizer();
-            }
+            handler.removeCallbacks(drawer);
+            if (v) { startVisualizer(); handler.post(drawer); }
+            else stopVisualizer();
         }
 
         @Override
@@ -118,11 +106,10 @@ public class RitmoWallpaperService extends WallpaperService {
             try {
                 vis = new Visualizer(0);
                 vis.setEnabled(false);
-                int[] range = Visualizer.getCaptureSizeRange();
-                captureSize = Math.min(1024, range[1]);
+                captureSize = Math.min(1024, Visualizer.getCaptureSizeRange()[1]);
                 vis.setCaptureSize(captureSize);
                 vis.setScalingMode(Visualizer.SCALING_MODE_NORMALIZED);
-                vis.setDataCaptureListener(this, Visualizer.getMaxCaptureRate(), true, true);
+                vis.setDataCaptureListener(this, Visualizer.getMaxCaptureRate(), false, true);
                 samplingHz = vis.getSamplingRate() / 1000f;
                 vis.setEnabled(true);
                 visError = false;
@@ -142,10 +129,9 @@ public class RitmoWallpaperService extends WallpaperService {
 
         private float now() { return SystemClock.uptimeMillis() / 1000f; }
 
+        // ---------- análisis ----------
         @Override
-        public void onWaveFormDataCapture(Visualizer v, byte[] bytes, int rate) {
-            wave = bytes.clone();
-        }
+        public void onWaveFormDataCapture(Visualizer v, byte[] bytes, int rate) { }
 
         @Override
         public void onFftDataCapture(Visualizer v, byte[] fft, int rate) {
@@ -157,7 +143,6 @@ public class RitmoWallpaperService extends WallpaperService {
                 float re = fft[2 * k], im = fft[2 * k + 1];
                 mag[k] = (float) Math.hypot(re, im) / 128f;
             }
-            // bandas logarítmicas 30 Hz – 14 kHz
             float fMin = 30f, fMax = 14000f;
             for (int i = 0; i < BARS; i++) {
                 float f0 = (float) (fMin * Math.pow(fMax / fMin, i / (double) BARS));
@@ -166,17 +151,12 @@ public class RitmoWallpaperService extends WallpaperService {
                 int b = Math.max(a + 1, (int) Math.ceil(f1 / binHz));
                 float m = 0;
                 for (int k = a; k < b && k < n; k++) m = Math.max(m, mag[k]);
-                // compresión para que se vean los agudos
-                targetBands[i] = (float) Math.min(1.0, Math.pow(m, 0.6) * (1f + i / (float) BARS));
+                targetBands[i] = (float) Math.min(1.0, Math.pow(m, 0.6) * (1f + 0.8f * i / BARS));
             }
-            // energía de graves (<150 Hz)
             int hi = Math.max(2, Math.round(150f / binHz));
-            float e = 0, all = 0;
+            float e = 0;
             for (int k = 1; k <= hi && k < n; k++) e += mag[k] * mag[k];
-            e /= hi;
-            for (int k = 1; k < n; k++) all += mag[k];
-            level = Math.min(1f, all / n * 6f);
-            detectBeat(e);
+            detectBeat(e / hi);
         }
 
         private void detectBeat(float e) {
@@ -184,40 +164,33 @@ public class RitmoWallpaperService extends WallpaperService {
             if (e > 0.002f) lastAudioT = t;
             recent.add(new float[]{t, e});
             while (!recent.isEmpty() && t - recent.get(0)[0] > 1.3f) recent.remove(0);
-            float avg = 0;
+            float avg = 0, var = 0;
             for (float[] r : recent) avg += r[1];
             avg /= recent.size();
-            float var = 0;
             for (float[] r : recent) var += (r[1] - avg) * (r[1] - avg);
             var /= recent.size();
             float thr = avg * 1.15f + (float) Math.sqrt(var) * 0.8f + 0.005f;
-            boolean beat = false;
             if (e > thr && e > 0.02f && t - lastBeat > 0.27f && recent.size() > 6) {
-                beat = true;
                 lastBeat = t;
                 pulse = 1f;
                 beatTimes.add(t);
                 while (!beatTimes.isEmpty() && t - beatTimes.get(0) > 10f) beatTimes.remove(0);
-                updateBpm();
+                if (beatTimes.size() >= 5) {
+                    float[] iv = new float[beatTimes.size() - 1];
+                    for (int i = 1; i < beatTimes.size(); i++) iv[i - 1] = beatTimes.get(i) - beatTimes.get(i - 1);
+                    Arrays.sort(iv);
+                    float med = iv[iv.length / 2];
+                    if (med > 0) {
+                        float b = 60f / med;
+                        while (b < 75) b *= 2;
+                        while (b > 190) b /= 2;
+                        bpm = bpm == 0 ? b : bpm * 0.7f + b * 0.3f;
+                    }
+                }
             }
-            energyHist[histPos] = e;
-            beatHist[histPos] = beat;
-            histPos = (histPos + 1) % HIST;
         }
 
-        private void updateBpm() {
-            if (beatTimes.size() < 5) return;
-            float[] iv = new float[beatTimes.size() - 1];
-            for (int i = 1; i < beatTimes.size(); i++) iv[i - 1] = beatTimes.get(i) - beatTimes.get(i - 1);
-            Arrays.sort(iv);
-            float med = iv[iv.length / 2];
-            if (med <= 0) return;
-            float b = 60f / med;
-            while (b < 75) b *= 2;
-            while (b > 190) b /= 2;
-            bpm = bpm == 0 ? b : bpm * 0.7f + b * 0.3f;
-        }
-
+        // ---------- dibujo ----------
         private void drawFrame() {
             SurfaceHolder holder = getSurfaceHolder();
             Canvas c = null;
@@ -226,12 +199,37 @@ public class RitmoWallpaperService extends WallpaperService {
                 if (c != null) render(c);
             } catch (Throwable ignored) {
             } finally {
-                if (c != null) {
-                    try { holder.unlockCanvasAndPost(c); } catch (Throwable ignored) {}
-                }
+                if (c != null) { try { holder.unlockCanvasAndPost(c); } catch (Throwable ignored) {} }
             }
             handler.removeCallbacks(drawer);
             if (visible) handler.postDelayed(drawer, 16);
+        }
+
+        private int[] barColor(int i) {
+            float f = i / (float) (BARS - 1);
+            if (f < 0.13f) return new int[]{184, 243, 90};
+            if (f < 0.5f) return new int[]{255, 200, 87};
+            if (f < 0.75f) return new int[]{255, 140, 90};
+            return new int[]{255, 77, 109};
+        }
+
+        /** k = brillo de la cara; depth 0..1 = cuánto se mezcla con el fondo. */
+        private int shade(int[] c, float k, float depth) {
+            int[] o = new int[3];
+            for (int j = 0; j < 3; j++) {
+                float v = Math.min(255f, c[j] * k);
+                o[j] = Math.round(v * (1 - depth) + BG[j] * depth);
+            }
+            return Color.rgb(o[0], o[1], o[2]);
+        }
+
+        private void drawQuad(Canvas c, float ax, float ay, float bx, float by,
+                              float cx, float cy, float dx, float dy, int color) {
+            quad.reset();
+            quad.moveTo(ax, ay); quad.lineTo(bx, by); quad.lineTo(cx, cy); quad.lineTo(dx, dy); quad.close();
+            face.setShader(null);
+            face.setColor(color);
+            c.drawPath(quad, face);
         }
 
         private void render(Canvas c) {
@@ -239,135 +237,97 @@ public class RitmoWallpaperService extends WallpaperService {
             float t = now();
             boolean silent = t - lastAudioT > 1.5f;
 
-            // suavizado
+            // suavizado de la fila de enfrente
             for (int i = 0; i < BARS; i++) {
-                float target = silent ? 0 : targetBands[i];
-                bands[i] += (target - bands[i]) * (target > bands[i] ? 0.5f : 0.12f);
+                float target = silent ? 0.02f + 0.02f * (float) Math.sin(t * 2 + i * 0.4f) : targetBands[i];
+                bands[i] += (target - bands[i]) * (target > bands[i] ? 0.55f : 0.14f);
             }
-            smoothLevel += ((silent ? 0 : level) - smoothLevel) * 0.1f;
+            if (frame++ % SNAP_EVERY == 0) {
+                float[] snap = rows.remove(rows.size() - 1);
+                System.arraycopy(bands, 0, snap, 0, BARS);
+                rows.add(1, snap);
+            }
+            rows.set(0, bands);
 
             // fondo
-            fillPaint.setShader(new LinearGradient(0, 0, 0, h, 0xFF0E1018, BG, Shader.TileMode.CLAMP));
-            c.drawRect(0, 0, w, h, fillPaint);
-            fillPaint.setShader(null);
+            fill.setShader(new LinearGradient(0, 0, 0, h, 0xFF10131C, 0xFF0A0C11, Shader.TileMode.CLAMP));
+            c.drawRect(0, 0, w, h, fill);
+            fill.setShader(null);
 
-            float cx = w / 2f, cy = h * 0.42f;
-            float base = Math.min(w, h) * 0.17f;
-            float breathe = silent ? (float) (0.06 * Math.sin(t * 1.6)) : 0;
-            float r = base * (1f + 0.22f * pulse + breathe);
+            // geometría 3D (proyección oblicua)
+            float ddx = w * 0.020f, ddy = -w * 0.016f;   // desplazamiento por fila hacia el fondo
+            float span = ddx * (ROWS - 1);
+            float x0 = w * 0.05f, W = w * 0.90f - span;
+            float step = W / BARS, bw = step * 0.72f;
+            float y0 = h * 0.80f, maxH = h * 0.40f;
+            float dX = ddx * 0.85f, dY = ddy * 0.85f;
 
-            // halo
-            float haloR = r * (2.2f + smoothLevel);
-            fillPaint.setShader(new RadialGradient(cx, cy, haloR,
-                    Color.argb((int) (40 + 90 * pulse), 255, 77, 109), Color.TRANSPARENT, Shader.TileMode.CLAMP));
-            c.drawCircle(cx, cy, haloR, fillPaint);
-            fillPaint.setShader(null);
+            // resplandor del piso con cada golpe
+            float glowR = w * 0.75f;
+            fill.setShader(new RadialGradient(w / 2f, y0, glowR,
+                    Color.argb((int) (30 + 110 * pulse), 255, 77, 109), Color.TRANSPARENT, Shader.TileMode.CLAMP));
+            c.drawCircle(w / 2f, y0, glowR, fill);
+            fill.setShader(null);
 
-            // ondas que se expanden con cada golpe
-            float since = t - lastBeat;
-            if (since < 1.2f && !silent) {
-                for (int k = 0; k < 3; k++) {
-                    float p = since / 1.2f + k * 0.12f;
-                    if (p > 1) continue;
-                    linePaint.setColor(Color.argb((int) (160 * (1 - p)), 255, 77, 109));
-                    linePaint.setStrokeWidth(3f);
-                    c.drawCircle(cx, cy, r * (1.1f + p * 1.6f), linePaint);
-                }
-            }
-
-            // espectro circular
-            float inner = r * 1.18f, maxLen = Math.min(w, h) * 0.22f;
-            barPaint.setStrokeWidth(Math.max(3f, (float) (2 * Math.PI * inner / BARS * 0.55)));
-            for (int half = 0; half < 2; half++) {
+            // de atrás hacia adelante, de izquierda a derecha
+            for (int r = ROWS - 1; r >= 0; r--) {
+                float[] row = rows.get(r);
+                float depth = Math.min(0.85f, r / (float) (ROWS - 1) * 0.9f);
+                float ox = x0 + ddx * r, oy = y0 + ddy * r;
                 for (int i = 0; i < BARS; i++) {
-                    double ang = -Math.PI / 2 + (half == 0 ? 1 : -1) * Math.PI * (i + 0.5) / BARS;
-                    float v = bands[i];
-                    float len = 4f + v * maxLen;
-                    float cos = (float) Math.cos(ang), sin = (float) Math.sin(ang);
-                    int col = i < BARS * 0.12f ? BASS : blend(WAVE, BEAT, i / (float) BARS);
-                    barPaint.setColor(withAlpha(col, (int) (90 + 165 * Math.min(1f, v * 1.4f))));
-                    c.drawLine(cx + cos * inner, cy + sin * inner,
-                            cx + cos * (inner + len), cy + sin * (inner + len), barPaint);
+                    float v = row[i];
+                    float bh = Math.max(3f, v * maxH);
+                    int[] col = barColor(i);
+                    float x = ox + i * step, top = oy - bh;
+                    float glow = r == 0 ? 0.75f + 0.45f * v + 0.25f * pulse : 0.8f;
+                    float sx = x + bw;
+                    // costado
+                    drawQuad(c, sx, oy, sx + dX, oy + dY, sx + dX, top + dY, sx, top, shade(col, 0.5f * glow, depth));
+                    // tapa
+                    drawQuad(c, x, top, x + bw, top, x + bw + dX, top + dY, x + dX, top + dY, shade(col, 1.25f * glow, depth));
+                    // frente
+                    if (r == 0) {
+                        face.setShader(new LinearGradient(0, top, 0, oy,
+                                shade(col, 0.95f * glow, 0), shade(col, 0.45f * glow, 0.25f), Shader.TileMode.CLAMP));
+                    } else {
+                        face.setShader(null);
+                        face.setColor(shade(col, 0.8f * glow, depth));
+                    }
+                    c.drawRect(x, top, x + bw, oy, face);
+                    face.setShader(null);
                 }
             }
 
-            // círculo central
-            fillPaint.setShader(new RadialGradient(cx, cy, r,
-                    Color.argb((int) (120 + 135 * pulse), 255, 120, 145),
-                    Color.argb((int) (40 + 120 * pulse), 255, 77, 109), Shader.TileMode.CLAMP));
-            c.drawCircle(cx, cy, r, fillPaint);
-            fillPaint.setShader(null);
-
-            // BPM al centro
-            textPaint.setTextSize(base * 0.55f);
-            String bpmTxt = (bpm > 0 && !silent) ? String.valueOf(Math.round(bpm)) : "--";
-            c.drawText(bpmTxt, cx, cy + base * 0.15f, textPaint);
-            smallText.setTextSize(base * 0.17f);
-            smallText.setColor(0xCCFFFFFF);
-            c.drawText("BPM", cx, cy + base * 0.42f, smallText);
-
-            // forma de onda
-            byte[] wv = wave;
-            float wy = h * 0.74f, wh = h * 0.06f;
-            if (wv != null && !silent) {
-                path.reset();
-                int N = Math.min(wv.length, 512);
-                for (int i = 0; i < N; i++) {
-                    float x = i / (float) (N - 1) * w;
-                    float y = wy - ((wv[i] & 0xFF) - 128) / 128f * wh;
-                    if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
-                }
-                linePaint.setColor(withAlpha(WAVE, 200));
-                linePaint.setStrokeWidth(3f);
-                c.drawPath(path, linePaint);
-            } else {
-                linePaint.setColor(0x334CC9F0);
-                linePaint.setStrokeWidth(2f);
-                c.drawLine(0, wy, w, wy, linePaint);
+            // reflejo suave bajo la fila de enfrente
+            for (int i = 0; i < BARS; i++) {
+                float x = x0 + i * step, rh = Math.max(3f, bands[i] * maxH) * 0.35f;
+                int[] col = barColor(i);
+                face.setShader(new LinearGradient(0, y0, 0, y0 + rh,
+                        Color.argb(70, col[0], col[1], col[2]), Color.TRANSPARENT, Shader.TileMode.CLAMP));
+                c.drawRect(x, y0 + 2, x + bw, y0 + 2 + rh, face);
             }
+            face.setShader(null);
 
-            // historial de energía de graves con golpes
-            float hy = h * 0.88f, hh = h * 0.07f;
-            float maxE = 0.05f;
-            for (float e : energyHist) maxE = Math.max(maxE, e);
-            path.reset();
-            for (int i = 0; i < HIST; i++) {
-                int idx = (histPos + i) % HIST;
-                float x = i / (float) (HIST - 1) * w;
-                float y = hy - energyHist[idx] / maxE * hh;
-                if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
-                if (beatHist[idx]) {
-                    fillPaint.setColor(0x55FF4D6D);
-                    c.drawRect(x - 2, hy - hh - 6, x + 2, hy + 4, fillPaint);
-                }
-            }
-            linePaint.setColor(withAlpha(BASS, 210));
-            linePaint.setStrokeWidth(3f);
-            c.drawPath(path, linePaint);
+            // BPM
+            float u = Math.min(w, h);
+            bpmText.setTextSize(u * 0.16f);
+            bpmText.setColor(Color.argb((int) (170 + 85 * pulse), 255, 255, 255));
+            String txt = (bpm > 0 && !silent) ? String.valueOf(Math.round(bpm)) : "--";
+            c.drawText(txt, w / 2f, h * 0.22f, bpmText);
+            smallText.setTextSize(u * 0.04f);
+            smallText.setColor(Color.argb((int) (120 + 135 * pulse), 255, 77, 109));
+            c.drawText("BPM", w / 2f, h * 0.22f + u * 0.06f, smallText);
 
             // mensajes
             smallText.setColor(0xFF8A91A5);
-            smallText.setTextSize(Math.min(w, h) * 0.035f);
-            if (noPermission) {
-                c.drawText("Abre Ritmógrafo y permite el micrófono", cx, h * 0.66f, smallText);
-            } else if (visError) {
-                c.drawText("Tu teléfono no permite capturar el audio", cx, h * 0.66f, smallText);
-            } else if (silent) {
-                c.drawText("Pon música en Spotify ♪", cx, h * 0.66f, smallText);
-            }
+            smallText.setTextSize(u * 0.037f);
+            String msg = null;
+            if (noPermission) msg = "Abre Ritmógrafo y permite el micrófono";
+            else if (visError) msg = "Tu teléfono no permite capturar el audio";
+            else if (silent) msg = "Pon música en Spotify ♪";
+            if (msg != null) c.drawText(msg, w / 2f, h * 0.88f, smallText);
 
             pulse *= 0.9f;
-        }
-
-        private int withAlpha(int color, int a) {
-            return (color & 0x00FFFFFF) | (Math.max(0, Math.min(255, a)) << 24);
-        }
-
-        private int blend(int a, int b, float f) {
-            int r = (int) (Color.red(a) + (Color.red(b) - Color.red(a)) * f);
-            int g = (int) (Color.green(a) + (Color.green(b) - Color.green(a)) * f);
-            int bl = (int) (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * f);
-            return Color.rgb(r, g, bl);
         }
     }
 }
