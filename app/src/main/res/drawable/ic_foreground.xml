@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ícono: barras de ritmo con un golpe rojo al centro (zona segura 66dp dentro de 108dp) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#4CC9F0" android:pathData="M30,50h5v8h-5z" />
+    <path android:fillColor="#B8F35A" android:pathData="M38,42h5v24h-5z" />
+    <path android:fillColor="#FF4D6D" android:pathData="M46,30h6v48h-6z" />
+    <path android:fillColor="#FF4D6D" android:pathData="M56,36h6v36h-6z" />
+    <path android:fillColor="#B8F35A" android:pathData="M65,44h5v20h-5z" />
+    <path android:fillColor="#4CC9F0" android:pathData="M73,50h5v8h-5z" />
+</vector>

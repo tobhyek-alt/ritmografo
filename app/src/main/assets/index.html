@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ritmógrafo — gráficas del ritmo de tu música</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0c11; --panel:#12151d; --line:#232837; --text:#e9ecf3; --muted:#8a91a5;
+  --beat:#ff4d6d; --wave:#4cc9f0; --bass:#b8f35a; --gold:#ffc857;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:"Space Grotesk",system-ui,sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 20px 48px}
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:20px}
+h1{margin:0;font-size:clamp(28px,4vw,44px);letter-spacing:-.02em;line-height:1}
+h1 span{color:var(--beat)}
+.sub{color:var(--muted);margin-top:8px;font-size:15px}
+.controls{display:flex;flex-wrap:wrap;gap:10px}
+button,.btn{
+  font:inherit;font-weight:500;font-size:14px;color:var(--text);background:#1b2030;border:1px solid var(--line);
+  padding:10px 16px;border-radius:999px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;transition:.15s
+}
+button:hover,.btn:hover{border-color:#3a4260;background:#222842}
+button.primary{background:var(--beat);border-color:var(--beat);color:#fff}
+button.primary:hover{filter:brightness(1.1);background:var(--beat)}
+button:disabled{opacity:.4;cursor:not-allowed}
+input[type=file]{display:none}
+#drop{
+  border:1.5px dashed #2c3346;border-radius:16px;padding:14px 18px;color:var(--muted);font-size:14px;
+  display:flex;align-items:center;gap:12px;margin-bottom:18px;transition:.15s
+}
+#drop.over{border-color:var(--beat);color:var(--text);background:#1a1018}
+#drop b{color:var(--text);font-weight:500}
+#msg{margin-left:auto;font-size:13px}
+.grid{display:grid;gap:14px}
+.top{grid-template-columns:260px 1fr}
+@media (max-width:820px){.top{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:16px;position:relative;min-width:0}
+.panel h2{margin:0 0 10px;font-size:13px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;display:flex;align-items:center;gap:8px}
+.panel h2 i{width:8px;height:8px;border-radius:50%;display:inline-block}
+.panel h2 small{margin-left:auto;text-transform:none;letter-spacing:0;font-family:"JetBrains Mono",monospace;font-size:12px}
+canvas{display:block;width:100%;border-radius:10px}
+.pulse{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px}
+#pulseCv{height:170px;width:170px}
+.bpm{font-family:"JetBrains Mono",monospace;font-size:48px;font-weight:600;line-height:1}
+.bpm-l{color:var(--muted);font-size:13px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+@media (max-width:820px){.stats{grid-template-columns:repeat(2,1fr)}}
+.stat{background:#0e1118;border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.stat .k{color:var(--muted);font-size:12px}
+.stat .v{font-family:"JetBrains Mono",monospace;font-size:22px;font-weight:600;margin-top:2px}
+.two{grid-template-columns:1fr 1fr;margin-top:14px}
+@media (max-width:820px){.two{grid-template-columns:1fr}}
+.full{margin-top:14px}
+#songCv{cursor:pointer}
+.time{font-family:"JetBrains Mono",monospace;color:var(--muted);font-size:12px;display:flex;justify-content:space-between;margin-top:6px}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-top:8px;flex-wrap:wrap}
+.legend span::before{content:"";display:inline-block;width:10px;height:3px;margin-right:6px;vertical-align:middle;background:var(--c)}
+footer{color:var(--muted);font-size:12px;margin-top:22px;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Ritmó<span>grafo</span></h1>
+      <div class="sub">Carga una canción y mira su ritmo: golpes, graves, espectro y BPM en tiempo real.</div>
+    </div>
+    <div class="controls">
+      <label class="btn" for="file">🎵 Elegir canción</label>
+      <input id="file" type="file" accept="audio/*">
+      <button id="play" class="primary" disabled>▶ Reproducir</button>
+      <button id="mic">🎙 Micrófono</button>
+    </div>
+  </header>
+
+  <div id="drop">⬇ <span>Arrastra aquí un archivo <b>MP3, WAV, M4A u OGG</b></span><span id="msg"></span></div>
+
+  <div class="grid top">
+    <div class="panel pulse">
+      <canvas id="pulseCv"></canvas>
+      <div class="bpm" id="bpmLive">--</div>
+      <div class="bpm-l">BPM en vivo</div>
+    </div>
+    <div class="panel">
+      <div class="stats">
+        <div class="stat"><div class="k">BPM de la canción</div><div class="v" id="sBpm">--</div></div>
+        <div class="stat"><div class="k">Golpes detectados</div><div class="v" id="sBeats">0</div></div>
+        <div class="stat"><div class="k">Intensidad</div><div class="v" id="sLevel">0%</div></div>
+        <div class="stat"><div class="k">Regularidad</div><div class="v" id="sReg">--</div></div>
+      </div>
+      <h2><i style="background:var(--bass)"></i>Energía de graves y golpes <small id="eLbl">últimos 10 s</small></h2>
+      <canvas id="energyCv" style="height:170px"></canvas>
+      <div class="legend">
+        <span style="--c:var(--bass)">energía de graves</span>
+        <span style="--c:#6b7390">umbral de golpe</span>
+        <span style="--c:var(--beat)">golpe detectado</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid two">
+    <div class="panel">
+      <h2><i style="background:var(--wave)"></i>Forma de onda</h2>
+      <canvas id="waveCv" style="height:160px"></canvas>
+    </div>
+    <div class="panel">
+      <h2><i style="background:var(--gold)"></i>Espectro de frecuencias</h2>
+      <canvas id="specCv" style="height:160px"></canvas>
+    </div>
+  </div>
+
+  <div class="panel full">
+    <h2><i style="background:var(--beat)"></i>Mapa del ritmo de toda la canción <small id="songInfo">carga un archivo para analizarlo</small></h2>
+    <canvas id="songCv" style="height:150px"></canvas>
+    <div class="time"><span id="tCur">0:00</span><span>Haz clic en el mapa para saltar a ese momento</span><span id="tDur">0:00</span></div>
+  </div>
+
+  <div class="panel full">
+    <h2><i style="background:var(--wave)"></i>Historial de BPM</h2>
+    <canvas id="bpmCv" style="height:120px"></canvas>
+  </div>
+
+  <footer>
+    Cómo funciona: la app separa los graves (bajo y bombo, &lt;150 Hz) y marca un golpe cuando su energía supera el promedio reciente.
+    Los BPM en vivo salen del intervalo típico entre golpes; los BPM de la canción se calculan analizando el archivo completo por autocorrelación.
+    Todo se procesa en tu navegador; el audio no se sube a ningún lado.
+  </footer>
+</div>
+
+<audio id="audio" crossorigin="anonymous"></audio>
+
+<script>
+const $ = id => document.getElementById(id);
+const audio = $('audio');
+let actx = null, analyser = null, mediaNode = null, micNode = null, micStream = null;
+let mode = null; // 'file' | 'mic'
+let song = null; // offline analysis result
+
+// ---------- live detection state ----------
+const HIST_SEC = 10;
+let energyHist = [];          // {t, e, thr, beat}
+let recent = [];              // {t, e} last ~1.3s
+let beats = [];               // beat times (s, performance clock)
+let lastBeat = 0, beatCount = 0, pulse = 0;
+let liveBpm = null, bpmHist = [], lastBpmPush = 0;
+
+function ensureCtx(){
+  if (!actx){
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = actx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.55;
+  }
+  if (actx.state === 'suspended') actx.resume();
+}
+
+function resetLive(){
+  energyHist = []; recent = []; beats = []; lastBeat = 0; beatCount = 0;
+  liveBpm = null; bpmHist = []; lastBpmPush = 0;
+  $('bpmLive').textContent = '--'; $('sBeats').textContent = '0'; $('sReg').textContent = '--';
+}
+
+function setMsg(t, err){ const m=$('msg'); m.textContent=t; m.style.color = err ? 'var(--beat)' : 'var(--muted)'; }
+
+// ---------- file loading ----------
+async function loadFile(f){
+  if (!f) return;
+  if (!/^audio\//.test(f.type) && !/\.(mp3|wav|m4a|ogg|flac|aac|webm)$/i.test(f.name)){ setMsg('Ese archivo no parece ser audio.', true); return; }
+  ensureCtx();
+  stopMic();
+  if (!mediaNode){ mediaNode = actx.createMediaElementSource(audio); }
+  mediaNode.disconnect(); mediaNode.connect(analyser); analyser.disconnect(); analyser.connect(actx.destination);
+  mode = 'file';
+  audio.src = URL.createObjectURL(f);
+  $('play').disabled = false; $('play').textContent = '▶ Reproducir';
+  resetLive(); song = null;
+  setMsg('Cargado: ' + f.name);
+  $('songInfo').textContent = 'analizando…'; $('sBpm').textContent = '…';
+  try{
+    const buf = await actx.decodeAudioData(await f.arrayBuffer());
+    song = await analyzeBuffer(buf);
+    $('sBpm').textContent = song.bpm.toFixed(1);
+    $('songInfo').textContent = `${song.bpm.toFixed(1)} BPM · ${song.grid.length} pulsos · ${fmt(buf.duration)}`;
+    $('tDur').textContent = fmt(buf.duration);
+  }catch(e){
+    console.error(e); $('songInfo').textContent = 'no se pudo analizar el archivo completo'; $('sBpm').textContent='--';
+  }
+}
+
+$('file').addEventListener('change', e => loadFile(e.target.files[0]));
+const drop = $('drop');
+['dragenter','dragover'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); if (ev==='drop' || e.target===document.documentElement) drop.classList.remove('over'); }));
+document.addEventListener('drop', e => { drop.classList.remove('over'); loadFile(e.dataTransfer.files[0]); });
+
+$('play').addEventListener('click', async () => {
+  ensureCtx();
+  if (mode !== 'file') return;
+  if (audio.paused){ try{ await audio.play(); }catch(e){ setMsg('No se pudo reproducir.', true); } }
+  else audio.pause();
+});
+audio.addEventListener('play', () => $('play').textContent = '❚❚ Pausa');
+audio.addEventListener('pause', () => $('play').textContent = '▶ Reproducir');
+audio.addEventListener('ended', () => $('play').textContent = '▶ Reproducir');
+
+// ---------- microphone ----------
+$('mic').addEventListener('click', async () => {
+  if (mode === 'mic'){ stopMic(); setMsg('Micrófono apagado.'); return; }
+  ensureCtx();
+  try{
+    micStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+    audio.pause();
+    if (mediaNode) mediaNode.disconnect();
+    analyser.disconnect(); // don't play mic back to speakers
+    micNode = actx.createMediaStreamSource(micStream);
+    micNode.connect(analyser);
+    mode = 'mic'; resetLive();
+    $('mic').textContent = '■ Detener micrófono';
+    setMsg('Escuchando el micrófono…');
+  }catch(e){
+    setMsg('Permite el micrófono en Ajustes › Apps › Ritmógrafo › Permisos.', true);
+  }
+});
+function stopMic(){
+  if (micNode){ micNode.disconnect(); micNode = null; }
+  if (micStream){ micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  if (mode === 'mic') mode = null;
+  $('mic').textContent = '🎙 Micrófono';
+}
+
+// ---------- offline whole-song analysis ----------
+async function analyzeBuffer(buf){
+  const sr = buf.sampleRate;
+  const off = new OfflineAudioContext(1, buf.length, sr);
+  const src = off.createBufferSource(); src.buffer = buf;
+  const lp = off.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 150; lp.Q.value = 0.7;
+  src.connect(lp); lp.connect(off.destination); src.start();
+  const low = (await off.startRendering()).getChannelData(0);
+  const full = buf.getChannelData(0);
+  const hopSec = 0.01, hop = Math.round(sr*hopSec), n = Math.floor(low.length/hop);
+  const envL = new Float32Array(n), envF = new Float32Array(n), onset = new Float32Array(n);
+  for (let i=0;i<n;i++){
+    let a=0,b=0; const s=i*hop;
+    for (let j=0;j<hop;j++){ const x=low[s+j], y=full[s+j]; a+=x*x; b+=y*y; }
+    envL[i]=Math.sqrt(a/hop); envF[i]=Math.sqrt(b/hop);
+  }
+  for (let i=1;i<n;i++) onset[i] = Math.max(0, envL[i]-envL[i-1]) + 0.35*Math.max(0, envF[i]-envF[i-1]);
+  // autocorrelation over 60–200 BPM, weighted toward ~120 BPM to avoid half/double errors
+  const minLag = Math.round(60/200/hopSec), maxLag = Math.round(60/60/hopSec);
+  const ac = new Float32Array(maxLag+2);
+  for (let lag=minLag; lag<=maxLag+1; lag++){
+    let s=0; for (let i=0;i+lag<n;i++) s += onset[i]*onset[i+lag];
+    ac[lag]=s;
+  }
+  let best=minLag, bestV=-1;
+  for (let lag=minLag; lag<=maxLag; lag++){
+    const bpm = 60/(lag*hopSec);
+    const w = Math.exp(-0.5*Math.pow(Math.log2(bpm/120)/0.9,2));
+    const v = ac[lag]*w;
+    if (v>bestV){ bestV=v; best=lag; }
+  }
+  // parabolic refinement
+  let lagF = best;
+  if (best>minLag && best<maxLag){
+    const a=ac[best-1], b=ac[best], c=ac[best+1], d=a-2*b+c;
+    if (d!==0) lagF = best + 0.5*(a-c)/d;
+  }
+  const bpm = 60/(lagF*hopSec);
+  // best phase for a beat grid
+  let bestP=0, bestPV=-1;
+  for (let p=0;p<best;p++){
+    let s=0; for (let t=p; t<n; t+=lagF) s += onset[Math.round(t)]||0;
+    if (s>bestPV){ bestPV=s; bestP=p; }
+  }
+  const grid=[]; for (let t=bestP; t<n; t+=lagF) grid.push(t*hopSec);
+  return { bpm, envL, envF, onset, hopSec, duration: buf.duration, grid };
+}
+
+// ---------- live analysis per frame ----------
+const freq = new Uint8Array(1024), timeD = new Float32Array(2048);
+function liveStep(now){
+  analyser.getByteFrequencyData(freq);
+  analyser.getFloatTimeDomainData(timeD);
+  const binHz = actx.sampleRate / analyser.fftSize;
+  const hi = Math.max(2, Math.round(150/binHz));
+  let e=0; for (let i=1;i<=hi;i++){ const v=freq[i]/255; e+=v*v; } e/=hi;
+  let rms=0; for (let i=0;i<timeD.length;i++) rms+=timeD[i]*timeD[i]; rms=Math.sqrt(rms/timeD.length);
+  $('sLevel').textContent = Math.min(100, Math.round(rms*250)) + '%';
+
+  recent.push({t:now,e}); while (recent.length && now-recent[0].t>1.3) recent.shift();
+  const avg = recent.reduce((s,r)=>s+r.e,0)/recent.length;
+  const vr = recent.reduce((s,r)=>s+(r.e-avg)**2,0)/recent.length;
+  const thr = avg*1.18 + Math.sqrt(vr)*0.9 + 0.01;
+  let beat=false;
+  if (e>thr && e>0.04 && now-lastBeat>0.27){
+    beat=true; lastBeat=now; beatCount++; pulse=1;
+    beats.push(now); while (beats.length && now-beats[0]>10) beats.shift();
+    $('sBeats').textContent = beatCount;
+    updateBpm();
+  }
+  energyHist.push({t:now,e,thr,beat}); while (energyHist.length && now-energyHist[0].t>HIST_SEC) energyHist.shift();
+  if (liveBpm && now-lastBpmPush>0.5){ lastBpmPush=now; bpmHist.push({t:now,b:liveBpm}); while (bpmHist.length>240) bpmHist.shift(); }
+}
+function updateBpm(){
+  if (beats.length<5) return;
+  const iv=[]; for (let i=1;i<beats.length;i++) iv.push(beats[i]-beats[i-1]);
+  const s=[...iv].sort((a,b)=>a-b), med=s[Math.floor(s.length/2)];
+  let b=60/med; while (b<75) b*=2; while (b>190) b/=2;
+  liveBpm = liveBpm ? liveBpm*0.7 + b*0.3 : b;
+  $('bpmLive').textContent = Math.round(liveBpm);
+  const mean=iv.reduce((a,c)=>a+c,0)/iv.length;
+  const sd=Math.sqrt(iv.reduce((a,c)=>a+(c-mean)**2,0)/iv.length);
+  const reg=Math.max(0, Math.round(100*(1-sd/mean)));
+  $('sReg').textContent = reg + '%';
+}
+
+// ---------- drawing ----------
+function fit(c){
+  const r=c.getBoundingClientRect(), d=window.devicePixelRatio||1;
+  const W=Math.round(r.width*d), H=Math.round(r.height*d);
+  if (c.width!==W || c.height!==H){ c.width=W; c.height=H; }
+  const g=c.getContext('2d'); g.setTransform(d,0,0,d,0,0); g.clearRect(0,0,r.width,r.height);
+  return [g, r.width, r.height];
+}
+function idle(g,w,h,text){
+  g.fillStyle='#0e1118'; g.fillRect(0,0,w,h);
+  g.fillStyle='#4a5168'; g.font='13px "Space Grotesk",sans-serif'; g.textAlign='center'; g.textBaseline='middle';
+  g.fillText(text,w/2,h/2);
+}
+function fmt(s){ s=Math.max(0,s||0); return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0'); }
+const active = () => (mode==='file' && !audio.paused) || mode==='mic';
+
+function drawPulse(){
+  const [g,w,h]=fit($('pulseCv')); const cx=w/2, cy=h/2;
+  const r0 = Math.min(w,h)*0.28;
+  for (let i=3;i>=1;i--){
+    g.beginPath(); g.arc(cx,cy,r0+(i*14)*pulse,0,Math.PI*2);
+    g.strokeStyle=`rgba(255,77,109,${0.18*pulse*(4-i)/3})`; g.lineWidth=2; g.stroke();
+  }
+  const grd=g.createRadialGradient(cx,cy,2,cx,cy,r0*(1+0.25*pulse));
+  grd.addColorStop(0,`rgba(255,120,145,${0.35+0.65*pulse})`); grd.addColorStop(1,`rgba(255,77,109,${0.08+0.4*pulse})`);
+  g.beginPath(); g.arc(cx,cy,r0*(1+0.25*pulse),0,Math.PI*2); g.fillStyle=grd; g.fill();
+  pulse*=0.9;
+}
+
+function drawWave(){
+  const [g,w,h]=fit($('waveCv'));
+  if (!active()) return idle(g,w,h,'Carga una canción y presiona Reproducir');
+  g.strokeStyle='#1d2232'; g.beginPath(); g.moveTo(0,h/2); g.lineTo(w,h/2); g.stroke();
+  // align to a rising zero crossing for a stable image
+  let start=0; for (let i=1;i<timeD.length/2;i++){ if (timeD[i-1]<0 && timeD[i]>=0){ start=i; break; } }
+  const N=timeD.length/2;
+  g.beginPath();
+  for (let i=0;i<N;i++){ const x=i/(N-1)*w, y=h/2 - timeD[start+i]*h*0.45; i?g.lineTo(x,y):g.moveTo(x,y); }
+  g.strokeStyle='#4cc9f0'; g.lineWidth=2; g.shadowColor='#4cc9f0'; g.shadowBlur=8; g.stroke(); g.shadowBlur=0;
+}
+
+function drawSpec(){
+  const [g,w,h]=fit($('specCv'));
+  if (!active()) return idle(g,w,h,'El espectro aparecerá aquí');
+  const N=56, binHz=actx.sampleRate/analyser.fftSize, fMin=30, fMax=16000, gap=2, bw=(w-gap*(N-1))/N;
+  for (let i=0;i<N;i++){
+    const f0=fMin*Math.pow(fMax/fMin,i/N), f1=fMin*Math.pow(fMax/fMin,(i+1)/N);
+    let a=Math.floor(f0/binHz), b=Math.max(a+1,Math.ceil(f1/binHz)), m=0;
+    for (let k=a;k<b && k<freq.length;k++) m=Math.max(m,freq[k]);
+    const v=m/255, bh=Math.max(2,v*(h-18)), x=i*(bw+gap);
+    g.fillStyle = f1<=170 ? '#b8f35a' : `hsl(${40-i*0.4},100%,${45+v*25}%)`;
+    g.globalAlpha = 0.35+0.65*v; g.fillRect(x,h-14-bh,bw,bh); g.globalAlpha=1;
+  }
+  g.fillStyle='#6b7390'; g.font='10px "JetBrains Mono",monospace'; g.textBaseline='bottom';
+  [[60,'60'],[250,'250'],[1000,'1k'],[4000,'4k'],[12000,'12k']].forEach(([f,l])=>{
+    const x=Math.log(f/fMin)/Math.log(fMax/fMin)*w; g.textAlign='center'; g.fillText(l+'Hz',x,h);
+  });
+}
+
+function drawEnergy(now){
+  const [g,w,h]=fit($('energyCv'));
+  if (!energyHist.length) return idle(g,w,h,'Aquí verás cada golpe del ritmo');
+  const maxE=Math.max(0.15,...energyHist.map(p=>Math.max(p.e,p.thr)))*1.1;
+  const X=t=>w-(now-t)/HIST_SEC*w, Y=v=>h-4-v/maxE*(h-10);
+  g.strokeStyle='#1a1f2c'; g.lineWidth=1;
+  for (let s=0;s<=HIST_SEC;s+=1){ const x=w-s/HIST_SEC*w; g.beginPath(); g.moveTo(x,0); g.lineTo(x,h); g.stroke(); }
+  // beats
+  energyHist.forEach(p=>{ if(p.beat){ const x=X(p.t); g.fillStyle='rgba(255,77,109,.22)'; g.fillRect(x-1.5,0,3,h); g.fillStyle='#ff4d6d'; g.beginPath(); g.arc(x,8,3.5,0,7); g.fill(); }});
+  // fill under energy
+  g.beginPath(); g.moveTo(X(energyHist[0].t),h);
+  energyHist.forEach(p=>g.lineTo(X(p.t),Y(p.e))); g.lineTo(X(energyHist.at(-1).t),h); g.closePath();
+  const grd=g.createLinearGradient(0,0,0,h); grd.addColorStop(0,'rgba(184,243,90,.35)'); grd.addColorStop(1,'rgba(184,243,90,0)');
+  g.fillStyle=grd; g.fill();
+  g.beginPath(); energyHist.forEach((p,i)=>i?g.lineTo(X(p.t),Y(p.e)):g.moveTo(X(p.t),Y(p.e)));
+  g.strokeStyle='#b8f35a'; g.lineWidth=2; g.stroke();
+  g.beginPath(); energyHist.forEach((p,i)=>i?g.lineTo(X(p.t),Y(p.thr)):g.moveTo(X(p.t),Y(p.thr)));
+  g.setLineDash([4,4]); g.strokeStyle='#6b7390'; g.lineWidth=1; g.stroke(); g.setLineDash([]);
+}
+
+function drawSong(){
+  const [g,w,h]=fit($('songCv'));
+  if (!song) return idle(g,w,h, mode==='file' ? 'Analizando la canción…' : 'Carga un archivo para ver el mapa completo del ritmo');
+  const {envL,envF,onset,hopSec,duration,grid}=song, n=envF.length, cols=Math.floor(w/2);
+  const step=n/cols; let mF=0,mL=0,mO=0;
+  const aF=[],aL=[],aO=[];
+  for (let c=0;c<cols;c++){
+    let f=0,l=0,o=0; const a=Math.floor(c*step), b=Math.floor((c+1)*step);
+    for (let i=a;i<b;i++){ f=Math.max(f,envF[i]); l=Math.max(l,envL[i]); o=Math.max(o,onset[i]); }
+    aF.push(f); aL.push(l); aO.push(o); mF=Math.max(mF,f); mL=Math.max(mL,l); mO=Math.max(mO,o);
+  }
+  const mid=h*0.5;
+  for (let c=0;c<cols;c++){
+    const x=c*2, f=aF[c]/mF, l=aL[c]/mL;
+    g.fillStyle='#2a3046'; g.fillRect(x,mid-f*mid*0.95,1.5,f*mid*1.9);
+    g.fillStyle='rgba(184,243,90,.75)'; g.fillRect(x,mid-l*mid*0.6,1.5,l*mid*1.2);
+    const o=aO[c]/mO; if (o>0.35){ g.fillStyle=`rgba(255,77,109,${o})`; g.fillRect(x,0,1.5,6+o*8); g.fillRect(x,h-6-o*8,1.5,6+o*8); }
+  }
+  // beat grid when the view is detailed enough
+  const pxPerBeat = w/duration*(60/song.bpm);
+  if (pxPerBeat>5){ g.fillStyle='rgba(255,255,255,.08)'; grid.forEach(t=>g.fillRect(t/duration*w,0,1,h)); }
+  if (mode==='file' && audio.duration){
+    const x=audio.currentTime/duration*w;
+    g.fillStyle='rgba(255,255,255,.05)'; g.fillRect(0,0,x,h);
+    g.fillStyle='#fff'; g.fillRect(x-1,0,2,h);
+    $('tCur').textContent=fmt(audio.currentTime);
+  }
+}
+$('songCv').addEventListener('click', e=>{
+  if (!song || mode!=='file') return;
+  const r=e.currentTarget.getBoundingClientRect();
+  audio.currentTime=(e.clientX-r.left)/r.width*song.duration;
+  resetLive();
+});
+
+function drawBpm(){
+  const [g,w,h]=fit($('bpmCv'));
+  if (!bpmHist.length) return idle(g,w,h,'La evolución de los BPM se dibuja mientras suena la música');
+  const vals=bpmHist.map(p=>p.b).concat(song?[song.bpm]:[]);
+  const lo=Math.min(...vals)-8, hi=Math.max(...vals)+8;
+  const Y=v=>h-6-(v-lo)/(hi-lo)*(h-16);
+  g.fillStyle='#6b7390'; g.font='10px "JetBrains Mono",monospace'; g.textAlign='left'; g.textBaseline='middle';
+  [lo+8,hi-8].forEach(v=>{ g.fillText(Math.round(v),4,Y(v)); g.strokeStyle='#1a1f2c'; g.beginPath(); g.moveTo(30,Y(v)); g.lineTo(w,Y(v)); g.stroke(); });
+  if (song){ g.setLineDash([5,5]); g.strokeStyle='#ff4d6d'; g.beginPath(); g.moveTo(30,Y(song.bpm)); g.lineTo(w,Y(song.bpm)); g.stroke(); g.setLineDash([]);
+    g.fillStyle='#ff4d6d'; g.textAlign='right'; g.fillText('canción '+song.bpm.toFixed(1),w-4,Y(song.bpm)-9); }
+  const N=bpmHist.length, X=i=>30+(N<2?0:i/(N-1))*(w-34);
+  g.beginPath(); bpmHist.forEach((p,i)=>i?g.lineTo(X(i),Y(p.b)):g.moveTo(X(i),Y(p.b)));
+  g.strokeStyle='#4cc9f0'; g.lineWidth=2; g.stroke();
+}
+
+function loop(){
+  const now=performance.now()/1000;
+  if (analyser && active()) liveStep(now);
+  drawPulse(); drawWave(); drawSpec(); drawEnergy(now); drawSong(); drawBpm();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
